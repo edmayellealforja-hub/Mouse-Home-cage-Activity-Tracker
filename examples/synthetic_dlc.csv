@@ -1,0 +1,9 @@
+scorer,example_model,example_model,example_model,example_model,example_model,example_model,example_model,example_model,example_model,example_model,example_model,example_model
+individuals,mouse_1,mouse_1,mouse_1,mouse_1,mouse_1,mouse_1,mouse_2,mouse_2,mouse_2,mouse_2,mouse_2,mouse_2
+bodyparts,nose,nose,nose,mouse_center,mouse_center,mouse_center,nose,nose,nose,mouse_center,mouse_center,mouse_center
+coords,x,y,likelihood,x,y,likelihood,x,y,likelihood,x,y,likelihood
+0,5,5,0.95,6,6,0.95,15,15,0.95,15,15,0.95
+1,5,5,0.20,6,6,0.95,15,15,0.95,15,15,0.95
+2,5,5,0.95,6,6,0.95,5,5,0.95,15,15,0.95
+3,15,15,0.95,6,6,0.95,5,5,0.95,15,15,0.95
+4,5,5,0.95,15,15,0.95,5,5,0.10,15,15,0.95
