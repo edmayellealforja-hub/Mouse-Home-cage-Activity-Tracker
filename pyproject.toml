@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mouse-homecage-activity-tracker"
+version = "0.1.0"
+description = "Quality-aware ROI occupancy analysis for multi-animal DeepLabCut data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+  "pandas>=2.1",
+]
+
+[project.optional-dependencies]
+hdf5 = ["tables>=3.9"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+homecage-track = "homecage_activity_tracker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
