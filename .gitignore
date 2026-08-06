@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+
+# Experimental inputs and generated outputs
+*.mp4
+*.avi
+*.h5
+*.hdf5
+outputs/
+results/
+
+# Large DLC exports should not be committed
+*_el.csv
+*DLC*.csv
