@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import os
 import re
@@ -489,12 +490,26 @@ def read_dlc_table(path: str) -> pd.DataFrame:
         df.columns = flatten_columns(df.columns)
         return df.reset_index(drop=True)
 
-    # DLC CSV normally has 3 header rows. Try that first.
+    # Multi-animal DLC CSV files have 4 header rows; single-animal files have 3.
     try:
-        df = pd.read_csv(path, header=[0, 1, 2])
+        with open(path, "r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.reader(stream)
+            labels = []
+            for _ in range(4):
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                labels.append(row[0].strip().lower() if row else "")
+        if labels[:4] == ["scorer", "individuals", "bodyparts", "coords"]:
+            header_rows = 4
+        elif labels[:3] == ["scorer", "bodyparts", "coords"]:
+            header_rows = 3
+        else:
+            raise ValueError("Unrecognized DLC CSV header")
+
+        df = pd.read_csv(path, header=list(range(header_rows)), index_col=0)
         if isinstance(df.columns, pd.MultiIndex):
-            # Drop frame index columns that appear as unnamed columns.
-            df = df.loc[:, ~df.columns.get_level_values(0).astype(str).str.contains("^Unnamed")]
             df.columns = flatten_columns(df.columns)
             return df.reset_index(drop=True)
     except Exception:
@@ -617,12 +632,20 @@ def count_dlc_occupancy(selected_points: List[Dict[str, object]], object_polygon
     individuals = sorted(set(str(p["individual"]) for p in selected_points))
     per_mouse_total: Dict[str, int] = {ind: 0 for ind in individuals}
     per_object_inside: Dict[str, Dict[str, int]] = {name: {ind: 0 for ind in individuals} for name in object_polygons}
+    per_object_total: Dict[str, Dict[str, int]] = {name: {ind: 0 for ind in individuals} for name in object_polygons}
 
     for p in selected_points:
         ind = str(p["individual"])
         per_mouse_total[ind] += 1
         pt = (float(p["x"]), float(p["y"]))
         for name, poly in object_polygons.items():
+            if name.lower().startswith(("food", "water")):
+                wanted = ["nose"]
+            else:
+                wanted = ["mouse_center", "center", "bodycenter", "body_center", "mid_back"]
+            if not point_bodypart_allowed(str(p.get("bodypart", "")), wanted):
+                continue
+            per_object_total[name][ind] += 1
             if point_in_polygon(pt, poly):
                 per_object_inside[name][ind] += 1
 
@@ -631,7 +654,7 @@ def count_dlc_occupancy(selected_points: List[Dict[str, object]], object_polygon
         n_inside = 0
         for ind in individuals:
             inside = per_object_inside[name][ind]
-            total = per_mouse_total[ind]
+            total = per_object_total[name][ind]
             if total <= 0:
                 continue
             if count_rule == "all":
@@ -834,9 +857,11 @@ def build_summary(df: pd.DataFrame, object_names: List[str], fps: float) -> Dict
     }
     for name in object_names:
         col = f"count_in_{name}"
+        valid = df[col].notna()
         out[f"mean_count_in_{name}"] = float(df[col].mean())
-        out[f"fraction_frames_any_in_{name}"] = float((df[col] > 0).mean())
-        out[f"fraction_frames_two_or_more_in_{name}"] = float((df[col] >= 2).mean())
+        out[f"analyzable_fraction_{name}"] = float(valid.mean())
+        out[f"fraction_analyzable_frames_any_in_{name}"] = float((df.loc[valid, col] > 0).mean()) if valid.any() else None
+        out[f"fraction_analyzable_frames_two_or_more_in_{name}"] = float((df.loc[valid, col] >= 2).mean()) if valid.any() else None
         raw_col = f"raw_count_in_{name}"
         if raw_col in df.columns:
             out[f"raw_mean_count_in_{name}"] = float(df[raw_col].mean())
@@ -860,17 +885,23 @@ def build_object_time_summary(df: pd.DataFrame, object_names: List[str], fps: fl
     }
     for name in object_names:
         col = f"count_in_{name}"
+        analyzable_frames = int(df[col].notna().sum())
+        analyzable_time_s = analyzable_frames / fps if fps > 0 else 0.0
         occupied_frames = int((df[col] > 0).sum())
         occupied_time_s = occupied_frames / fps if fps > 0 else 0.0
         total_mouse_frames = float(df[col].sum())
         total_mouse_time_s = total_mouse_frames / fps if fps > 0 else 0.0
         avg_time_per_mouse_s = total_mouse_time_s / n_mice if n_mice > 0 else 0.0
         out["objects"][name] = {
+            "analyzable_frames": analyzable_frames,
+            "analyzable_time_s": float(analyzable_time_s),
+            "tracking_coverage_percent": float(100.0 * analyzable_frames / total_frames) if total_frames > 0 else 0.0,
             "occupied_frames": occupied_frames,
             "occupied_time_s": float(occupied_time_s),
             "occupied_time_min": float(occupied_time_s / 60.0),
             "occupied_time_hr": float(occupied_time_s / 3600.0),
-            "occupied_percent_of_recording": float(100.0 * occupied_time_s / total_duration_s) if total_duration_s > 0 else 0.0,
+            "occupied_percent_of_analyzable_time": float(100.0 * occupied_time_s / analyzable_time_s) if analyzable_time_s > 0 else None,
+            "occupied_percent_of_recording": float(100.0 * occupied_time_s / total_duration_s) if analyzable_frames == total_frames and total_duration_s > 0 else None,
             "total_mouse_frames": float(total_mouse_frames),
             "total_mouse_time_s": float(total_mouse_time_s),
             "total_mouse_time_min": float(total_mouse_time_s / 60.0),
@@ -1018,8 +1049,16 @@ def run(cfg: Config) -> None:
         raise RuntimeError("You must provide --dlc_csv or --dlc_h5 for DLC mode.")
     dlc_df = read_dlc_table(cfg.dlc_path)
     point_columns = parse_dlc_columns(dlc_df)
+    raw_slots = sorted(set(str(columns["individual"]) for columns in point_columns.values()))
+    if len(raw_slots) != cfg.n_mice:
+        raise RuntimeError(
+            f"Expected {cfg.n_mice} mice, but the DLC file contains {len(raw_slots)} "
+            f"raw detection slots: {raw_slots}"
+        )
     print(f"Loaded DLC file: {cfg.dlc_path}")
     print(f"DLC frames: {len(dlc_df)}")
+    print(f"Raw DLC detection slots: {', '.join(raw_slots)}")
+    print("WARNING: raw DLC slot labels are not verified persistent mouse identities.")
     print("Available bodyparts:", ", ".join(available_bodyparts(point_columns)))
     if cfg.bodyparts:
         print("Using bodyparts:", ", ".join(cfg.bodyparts))
@@ -1065,6 +1104,10 @@ def run(cfg: Config) -> None:
         print(
             f"House entrance logic enabled: house='{cfg.house_name}', "
             f"entrance='{cfg.house_entrance_name}', hold_frames={cfg.house_missing_hold_frames}"
+        )
+        print(
+            "WARNING: covered-house occupancy is an exploratory entry/exit estimate and "
+            "must be validated before biological interpretation."
         )
 
     while True:
@@ -1121,7 +1164,7 @@ def run(cfg: Config) -> None:
             qc = object_qc_info.get(name)
             count_valid = 1 if qc is None else int(qc.get("count_valid", 1))
             if cfg.exclude_qc_review_frames and count_valid == 0:
-                object_counts[final_col] = 0
+                object_counts[final_col] = np.nan
             else:
                 object_counts[final_col] = raw_object_counts[raw_col]
 
@@ -1238,7 +1281,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dlc_csv", type=str, default=None, help="Path to DLC CSV file")
     parser.add_argument("--dlc_h5", type=str, default=None, help="Path to DLC H5 file")
     parser.add_argument("--max_frames", type=int, default=None)
-    parser.add_argument("--n_mice", type=int, default=1, help="Number of mice in the cage")
+    parser.add_argument("--n_mice", type=int, default=None, help="Actual number of mice in the cage; required for DLC analysis")
     parser.add_argument("--likelihood_threshold", type=float, default=0.60, help="Minimum DLC likelihood to use a bodypart")
     parser.add_argument("--bodyparts", type=str, default="nose,center,bodycenter,body_center,tailbase,tail_base", help="Comma-separated DLC bodyparts to use. Use 'all' for all bodyparts.")
     parser.add_argument("--count_rule", type=str, default="any", choices=["any", "majority", "all"], help="How many selected bodyparts must be inside ROI to count a mouse inside")
@@ -1297,6 +1340,8 @@ def main() -> None:
     dlc_path = args.dlc_h5 if args.dlc_h5 else args.dlc_csv
     if not dlc_path:
         raise SystemExit("You must provide --dlc_csv or --dlc_h5 for DLC mode.")
+    if args.n_mice is None or args.n_mice <= 0:
+        raise SystemExit("You must provide a positive --n_mice value for DLC mode.")
 
     bodyparts = None
     if args.bodyparts and args.bodyparts.strip().lower() != "all":
