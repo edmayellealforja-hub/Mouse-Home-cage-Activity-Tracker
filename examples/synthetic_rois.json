@@ -1,0 +1,17 @@
+{
+  "image_size": [20, 20],
+  "rois": {
+    "food": {
+      "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]],
+      "bodyparts": ["nose"],
+      "count_rule": "any",
+      "description": "Synthetic food interaction area"
+    },
+    "house": {
+      "polygon": [[10, 10], [19, 10], [19, 19], [10, 19]],
+      "bodyparts": ["mouse_center"],
+      "count_rule": "any",
+      "description": "Visible center-point occupancy only"
+    }
+  }
+}
